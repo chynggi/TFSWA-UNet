@@ -125,7 +125,7 @@ class SourceSeparator:
             model_input, mean, std = self.normalizer.forward(model_input, return_stats=True)
         
     # Inference with AMP
-    with torch.amp.autocast(device_type="cuda", enabled=self.use_amp):
+        with torch.amp.autocast(device_type="cuda", enabled=self.use_amp):
             masks = self.model(model_input)  # [1, num_stems, freq, time]
         
         # Denormalize masks (if needed)
