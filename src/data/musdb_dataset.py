@@ -235,8 +235,9 @@ class MUSDB18Dataset(Dataset):
             targets: Dict of stem_name -> (2, samples) stereo audio
         """
         # MUSDB18-HQ structure: root/train|test/track_name/stem.wav
-        # track.path points to the track directory
-        track_path = Path(track.path)
+        # track.path points to mixture.wav, so we need the parent directory
+        track_file = Path(track.path)
+        track_path = track_file.parent  # Get the track directory
         track_length = track.samples
         
         # Debug: Print track path for first load
@@ -244,6 +245,8 @@ class MUSDB18Dataset(Dataset):
             print(f"\nDEBUG: Track path structure:")
             print(f"  track.path: {track.path}")
             print(f"  track.name: {track.name}")
+            print(f"  track_file: {track_file}")
+            print(f"  track_path (parent): {track_path}")
             print(f"  track_path exists: {track_path.exists()}")
             if track_path.exists():
                 print(f"  Contents: {list(track_path.iterdir())[:5]}")
@@ -268,9 +271,6 @@ class MUSDB18Dataset(Dataset):
                 other_audio = None
                 for other_stem in ['drums', 'bass', 'other']:
                     stem_path = track_path / f"{other_stem}.wav"
-                    if not stem_path.exists():
-                        # Try without track subfolder (some formats store differently)
-                        stem_path = Path(track.path).parent / f"{track.name}_{other_stem}.wav"
                     
                     if stem_path.exists():
                         try:
@@ -286,16 +286,15 @@ class MUSDB18Dataset(Dataset):
                 
                 if other_audio is None:
                     # Fallback: load from musdb if file loading fails
-                    print(f"Warning: Could not load 'other' stem files, using fallback method")
+                    if not hasattr(self, '_warned_other_fallback'):
+                        print(f"Warning: Could not load 'other' stem files, using fallback method")
+                        self._warned_other_fallback = True
                     return self._load_audio_segment(track, start_sample)
                     
                 targets[stem_name] = torch.from_numpy(other_audio).float()
                 stem_audios.append(other_audio)
             else:
                 stem_path = track_path / f"{stem_name}.wav"
-                if not stem_path.exists():
-                    # Try alternative path format
-                    stem_path = Path(track.path).parent / f"{track.name}_{stem_name}.wav"
                 
                 if stem_path.exists():
                     try:
@@ -306,7 +305,9 @@ class MUSDB18Dataset(Dataset):
                         chunk = np.zeros((2, self.segment_samples), dtype=np.float32)
                 else:
                     # Fallback to loading full track
-                    print(f"Warning: Stem file not found: {stem_path}, using fallback")
+                    if not hasattr(self, '_warned_stem_fallback'):
+                        print(f"Warning: Stem file not found: {stem_path}, using fallback")
+                        self._warned_stem_fallback = True
                     return self._load_audio_segment(track, start_sample)
                     
                 targets[stem_name] = torch.from_numpy(chunk).float()
