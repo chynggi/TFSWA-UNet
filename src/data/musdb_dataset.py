@@ -1,16 +1,50 @@
-"""MUSDB18 dataset loader with flexible stem selection."""
+"""MUSDB18 dataset loader with flexible stem selection and memory optimization."""
 from __future__ import annotations
 
+import os
 import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torchaudio
+import soundfile as sf
 from torch.utils.data import Dataset
 
 import musdb
+
+
+def load_chunk(path: str, length: int, chunk_size: int, offset: Optional[int] = None) -> np.ndarray:
+    """
+    Load audio chunk efficiently using soundfile.
+    
+    Args:
+        path: Path to audio file
+        length: Total length of audio in samples
+        chunk_size: Size of chunk to load
+        offset: Starting offset (random if None)
+        
+    Returns:
+        audio: (2, chunk_size) stereo audio chunk
+    """
+    if chunk_size <= length:
+        if offset is None:
+            offset = np.random.randint(length - chunk_size + 1)
+        # Load only the required chunk
+        x = sf.read(path, dtype='float32', start=offset, frames=chunk_size)[0]
+    else:
+        # If chunk is larger than file, load full file and pad
+        x = sf.read(path, dtype='float32')[0]
+        if len(x.shape) == 1:
+            pad = np.zeros((chunk_size - length))
+        else:
+            pad = np.zeros([chunk_size - length, x.shape[-1]])
+        x = np.concatenate([x, pad], axis=0)
+    
+    # Ensure stereo format (2, samples)
+    if len(x.shape) == 1:
+        x = np.expand_dims(x, axis=1)
+    return x.T
 
 
 class MUSDB18Dataset(Dataset):
@@ -46,8 +80,10 @@ class MUSDB18Dataset(Dataset):
         segment_seconds: float = 10.0,
         random_segments: bool = True,
         overlap: float = 0.25,
-    is_wav: Optional[bool] = None,
-    max_segments_per_track: Optional[int] = None,
+        is_wav: Optional[bool] = None,
+        max_segments_per_track: Optional[int] = None,
+        use_efficient_loading: bool = True,
+        min_mean_abs: float = 0.0,
     ) -> None:
         super().__init__()
         
@@ -69,6 +105,11 @@ class MUSDB18Dataset(Dataset):
         self.max_segments_per_track = max_segments_per_track
         if self.max_segments_per_track is not None and self.max_segments_per_track <= 0:
             raise ValueError("max_segments_per_track must be positive when provided")
+        
+        # Memory optimization options
+        self.use_efficient_loading = use_efficient_loading
+        self.min_mean_abs = min_mean_abs  # Minimum absolute mean to filter silent chunks
+        self._track_cache = {}  # Cache for track paths
         
         # Target stems configuration
         if target_stems is None:
@@ -179,6 +220,77 @@ class MUSDB18Dataset(Dataset):
             f"Stem '{stem_name}' not available in track '{track.name}'. Available sources: {sorted(available_sources)}"
         )
     
+    def _load_audio_segment_efficient(
+        self,
+        track: musdb.MultiTrack,
+        start_sample: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Load audio segment efficiently using chunk-based loading.
+        
+        This method loads only the required audio chunk instead of the entire track.
+        
+        Returns:
+            mixture: (2, samples) stereo mixture
+            targets: Dict of stem_name -> (2, samples) stereo audio
+        """
+        # Get track information
+        track_path = Path(track.path)
+        track_length = track.samples
+        
+        # Determine segment start
+        if start_sample is None:
+            if self.random_segments:
+                max_start = max(0, track_length - self.segment_samples)
+                start_sample = random.randint(0, max_start) if max_start > 0 else 0
+            else:
+                start_sample = 0
+        
+        # Load stems efficiently using soundfile
+        targets = {}
+        stem_audios = []
+        
+        for stem_name in self.target_stems:
+            # Find the stem file path
+            if stem_name == 'other' and len(self.target_stems) == 2 and 'vocals' in self.target_stems:
+                # For binary separation, combine non-vocal stems
+                other_audio = None
+                for other_stem in ['drums', 'bass', 'other']:
+                    stem_path = track_path / f"{other_stem}.wav"
+                    if stem_path.exists():
+                        chunk = load_chunk(str(stem_path), track_length, 
+                                         self.segment_samples, start_sample)
+                        if other_audio is None:
+                            other_audio = chunk
+                        else:
+                            other_audio = other_audio + chunk
+                
+                if other_audio is None:
+                    other_audio = np.zeros((2, self.segment_samples), dtype=np.float32)
+                targets[stem_name] = torch.from_numpy(other_audio).float()
+                stem_audios.append(other_audio)
+            else:
+                stem_path = track_path / f"{stem_name}.wav"
+                if stem_path.exists():
+                    chunk = load_chunk(str(stem_path), track_length, 
+                                     self.segment_samples, start_sample)
+                else:
+                    chunk = np.zeros((2, self.segment_samples), dtype=np.float32)
+                targets[stem_name] = torch.from_numpy(chunk).float()
+                stem_audios.append(chunk)
+        
+        # Create mixture by summing all stems
+        mixture = np.sum(stem_audios, axis=0)
+        mixture = torch.from_numpy(mixture).float()
+        
+        # Check if chunk is loud enough (filter silent chunks)
+        if self.min_mean_abs > 0:
+            if np.abs(mixture.numpy()).mean() < self.min_mean_abs:
+                # Recursively try another chunk
+                return self._load_audio_segment_efficient(track, start_sample=None)
+        
+        return mixture, targets
+    
     def _load_audio_segment(
         self,
         track: musdb.MultiTrack,
@@ -191,6 +303,15 @@ class MUSDB18Dataset(Dataset):
             mixture: (2, samples) stereo mixture
             targets: Dict of stem_name -> (2, samples) stereo audio
         """
+        # Use efficient loading if enabled
+        if self.use_efficient_loading and self.is_wav:
+            try:
+                return self._load_audio_segment_efficient(track, start_sample)
+            except Exception as e:
+                # Fallback to original method if efficient loading fails
+                print(f"Efficient loading failed, using fallback: {e}")
+        
+        # Original loading method (loads entire track into memory)
         # Get track length
         track_length = track.audio.shape[0]
         

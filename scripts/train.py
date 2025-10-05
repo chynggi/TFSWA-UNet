@@ -16,6 +16,7 @@ from src.models.tfswa_unet import TFSWAUNet
 from src.data.musdb_dataset import MUSDB18Dataset, collate_fn
 from src.data.stft_processor import STFTProcessor
 from src.training.losses import SourceSeparationLoss
+from src.optimization.gradient_checkpoint import enable_gradient_checkpointing
 from src.training.trainer import Trainer
 
 
@@ -68,8 +69,18 @@ def parse_args():
                         help='Gradient clipping value')
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers')
+    parser.add_argument('--persistent_workers', action='store_true',
+                        help='Keep data loading workers alive between epochs')
+    parser.add_argument('--prefetch_factor', type=int, default=2,
+                        help='Number of batches to prefetch per worker')
+    parser.add_argument('--pin_memory', action='store_true', default=True,
+                        help='Use pinned memory for faster GPU transfer')
     parser.add_argument('--val_segments_per_track', type=int, default=1,
                         help='Number of sequential validation segments per track (None for all)')
+    parser.add_argument('--use_efficient_loading', action='store_true', default=True,
+                        help='Use chunk-based efficient loading to reduce VRAM usage')
+    parser.add_argument('--min_mean_abs', type=float, default=0.001,
+                        help='Minimum absolute mean to filter silent chunks')
     
     # Loss arguments
     parser.add_argument('--l1_weight', type=float, default=1.0,
@@ -92,6 +103,8 @@ def parse_args():
                         help='Device to use')
     parser.add_argument('--use_amp', action='store_true',
                         help='Use automatic mixed precision')
+    parser.add_argument('--use_checkpointing', action='store_true',
+                        help='Enable gradient checkpointing to reduce memory usage')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from checkpoint')
     parser.add_argument('--seed', type=int, default=42,
@@ -124,6 +137,9 @@ def main():
     
     # Create datasets
     print("\nCreating datasets...")
+    print(f"Using efficient loading: {args.use_efficient_loading}")
+    print(f"Minimum mean absolute value: {args.min_mean_abs}")
+    
     train_dataset = MUSDB18Dataset(
         root=args.data_root,
         split='train',
@@ -131,6 +147,8 @@ def main():
         sample_rate=args.sample_rate,
         segment_seconds=args.segment_seconds,
         random_segments=True,
+        use_efficient_loading=args.use_efficient_loading,
+        min_mean_abs=args.min_mean_abs,
     )
     
     val_dataset = MUSDB18Dataset(
@@ -144,16 +162,27 @@ def main():
             None if args.val_segments_per_track is None or args.val_segments_per_track <= 0
             else args.val_segments_per_track
         ),
+        use_efficient_loading=args.use_efficient_loading,
+        min_mean_abs=0.0,  # Don't filter validation data
     )
     
-    # Create data loaders
+    # Create data loaders with memory optimization
+    print(f"\nDataLoader settings:")
+    print(f"  - Batch size: {args.batch_size}")
+    print(f"  - Num workers: {args.num_workers}")
+    print(f"  - Persistent workers: {args.persistent_workers}")
+    print(f"  - Prefetch factor: {args.prefetch_factor}")
+    print(f"  - Pin memory: {args.pin_memory}")
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         collate_fn=collate_fn,
-        pin_memory=True,
+        pin_memory=args.pin_memory,
+        persistent_workers=args.persistent_workers and args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
     )
     
     val_loader = DataLoader(
@@ -162,7 +191,9 @@ def main():
         shuffle=False,
         num_workers=args.num_workers,
         collate_fn=collate_fn,
-        pin_memory=True,
+        pin_memory=args.pin_memory,
+        persistent_workers=args.persistent_workers and args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
     )
     
     print(f"Train dataset: {len(train_dataset)} samples")
@@ -185,6 +216,10 @@ def main():
     )
     
     print(f"Model created with {model.get_num_parameters():,} parameters")
+
+    if args.use_checkpointing:
+        model = enable_gradient_checkpointing(model)
+        print("Gradient checkpointing enabled")
     
     # Create STFT processor
     stft_processor = STFTProcessor(

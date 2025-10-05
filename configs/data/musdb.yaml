@@ -1,10 +1,18 @@
 root: data/musdb18
 sample_rate: 44100
-segment_seconds: 10
+segment_seconds: 6.0  # Reduced from 10 to save VRAM
 stft:
-  window_size: 4096
-  hop_length: 1024
+  window_size: 2048  # Reduced from 4096 to save VRAM
+  hop_length: 512     # Reduced from 1024 accordingly
   window: hann
+
+# Memory optimization settings
+use_efficient_loading: true  # Use chunk-based loading instead of full track loading
+min_mean_abs: 0.001         # Filter silent chunks to save processing time
+persistent_workers: true     # Keep workers alive between epochs
+prefetch_factor: 2           # Number of batches to prefetch per worker
+pin_memory: true             # Use pinned memory for faster GPU transfer
+
 augmentations:
   time_stretch: [0.9, 1.1]
   pitch_shift: [-2, 2]
