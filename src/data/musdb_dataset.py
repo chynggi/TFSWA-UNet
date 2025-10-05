@@ -66,8 +66,21 @@ class MUSDB18Dataset(Dataset):
         self.target_stems = target_stems
         self._validate_stems()
         
-        # Load MUSDB18 tracks
-        self.mus = musdb.DB(root=str(self.root), subsets=[split], split='train' if split == 'train' else 'valid')
+        # Load MUSDB18 tracks (musdb expects validation split with subsets=['train'])
+        if split not in {'train', 'valid', 'test'}:
+            raise ValueError("split must be one of {'train', 'valid', 'test'}")
+
+        if split == 'train':
+            subsets = ['train']
+            split_arg: Optional[str] = None
+        elif split == 'valid':
+            subsets = ['train']
+            split_arg = 'valid'
+        else:  # split == 'test'
+            subsets = ['test']
+            split_arg = None
+
+        self.mus = musdb.DB(root=str(self.root), subsets=subsets, split=split_arg)
         self.tracks = self.mus.tracks
         
         print(f"Loaded {len(self.tracks)} tracks from MUSDB18 {split} split")
