@@ -99,8 +99,8 @@ def parse_args():
                         help='Checkpoint saving frequency')
     
     # Evaluation arguments
-    parser.add_argument('--eval_sdr', action='store_true', default=True,
-                        help='Evaluate with real source separation and SDR metrics')
+    parser.add_argument('--eval_sdr', type=lambda x: x.lower() == 'true', default=True,
+                        help='Evaluate with real source separation and SDR metrics (default: True)')
     parser.add_argument('--eval_num_tracks', type=int, default=5,
                         help='Number of validation tracks to evaluate SDR on (5 recommended)')
     parser.add_argument('--no_eval_sdr', dest='eval_sdr', action='store_false',
@@ -141,6 +141,10 @@ def main():
     print(f"Learning rate: {args.learning_rate}")
     print(f"Device: {args.device}")
     print(f"Output dir: {args.output_dir}")
+    print(f"SDR Evaluation: {args.eval_sdr}")
+    if args.eval_sdr:
+        print(f"  - Eval tracks: {args.eval_num_tracks}")
+        print(f"  - Eval frequency: Every {args.val_every_n_epochs * 5} epochs")
     print("=" * 80)
     
     # Create datasets

@@ -33,15 +33,20 @@ TFSWA-UNet 학습 과정에서 실제 음원 분리를 수행하고 SDR(Signal-t
 
 ## Usage
 
-### Basic Training with SDR Evaluation
+### Basic Training with SDR Evaluation (기본값)
+
+SDR 평가는 기본적으로 활성화되어 있습니다:
 
 ```bash
 python scripts/train.py \
     --data_root /path/to/musdb18 \
-    --eval_sdr \
     --eval_num_tracks 5 \
     --val_every_n_epochs 5
 ```
+
+**SDR 평가 시점**: 
+- 첫 번째 validation (epoch 5)
+- 이후 5번째 validation마다 (epoch 25, 50, 75, 100...)
 
 ### Disable SDR Evaluation (Faster)
 
@@ -55,13 +60,16 @@ python scripts/train.py \
 
 ### Adjust Evaluation Frequency
 
-SDR 평가는 계산 비용이 높으므로, validation frequency의 5배마다 수행됩니다:
+SDR 평가는 계산 비용이 높으므로, 첫 번째 validation과 이후 5번째 validation마다 수행됩니다:
 
 ```bash
 python scripts/train.py \
-    --val_every_n_epochs 5 \
-    # SDR 평가는 5, 25, 50, 75... epoch마다 수행
+    --val_every_n_epochs 5
+    # Validation: epochs 5, 10, 15, 20, 25, 30...
+    # SDR 평가: epochs 5 (val #1), 25 (val #5), 50 (val #10), 75 (val #15)...
 ```
+
+첫 validation에서도 SDR 평가를 수행하여 초기 성능을 확인할 수 있습니다.
 
 ### Low VRAM Settings
 
@@ -205,11 +213,21 @@ sdr/avg_sdr
 if (epoch + 1) % 5 == 0:
     val_loss = validate()  # ~10 seconds
     
-# Every 25 epochs: SDR-based evaluation (slow but accurate)
-if (epoch + 1) % 25 == 0:
-    sdr_metrics = evaluate_sdr()  # ~90 seconds
-    # Use avg_sdr for best model selection
+    # First validation and every 5th validation: SDR evaluation
+    val_count = (epoch + 1) // 5  # validation number
+    if val_count == 1 or val_count % 5 == 0:
+        sdr_metrics = evaluate_sdr()  # ~90 seconds
+        # Use avg_sdr for best model selection
 ```
+
+**실제 실행**:
+- Epoch 5 (val #1): Loss + SDR ✓
+- Epoch 10 (val #2): Loss only
+- Epoch 15 (val #3): Loss only
+- Epoch 20 (val #4): Loss only
+- Epoch 25 (val #5): Loss + SDR ✓
+- Epoch 30 (val #6): Loss only
+- ...
 
 ### Best Model Criteria
 

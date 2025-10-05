@@ -104,15 +104,18 @@ class Trainer:
         self.model = self.model.to(device)
         self.stft_processor = self.stft_processor.to(device)
         
-        print(f"Trainer initialized:")
+        print(f"\nTrainer initialized:")
         print(f"  Device: {device}")
         print(f"  Output dir: {output_dir}")
         print(f"  Max epochs: {max_epochs}")
         print(f"  Mixed precision: {use_amp}")
         print(f"  Target stems: {self.target_stems}")
-        print(f"  Evaluate SDR: {eval_sdr}")
+        print(f"\n  SDR Evaluation: {'ENABLED' if eval_sdr else 'DISABLED'}")
         if eval_sdr:
-            print(f"  Eval tracks per validation: {eval_num_tracks}")
+            print(f"    - Eval tracks: {eval_num_tracks}")
+            print(f"    - Validation every: {val_every_n_epochs} epochs")
+            print(f"    - SDR eval at validations: #1, #5, #10, #15, ...")
+            print(f"    - SDR eval epochs: {val_every_n_epochs}, {val_every_n_epochs*5}, {val_every_n_epochs*10}, ...")
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
@@ -601,9 +604,14 @@ class Trainer:
                 else:
                     val_loss = float('inf')
                 
-                # SDR-based evaluation (every 5 epochs to save time)
-                if self.eval_sdr and (epoch + 1) % (self.val_every_n_epochs * 5) == 0:
-                    print(f"\nPerforming SDR evaluation...")
+                # SDR-based evaluation (first validation and every 5 validations thereafter)
+                val_count = (epoch + 1) // self.val_every_n_epochs
+                should_eval_sdr = self.eval_sdr and (val_count == 1 or val_count % 5 == 0)
+                
+                if should_eval_sdr:
+                    print(f"\n{'='*60}")
+                    print(f"Performing SDR evaluation (validation #{val_count})...")
+                    print(f"{'='*60}")
                     sdr_metrics = self.evaluate_sdr()
                     
                     if sdr_metrics:
