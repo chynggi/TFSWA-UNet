@@ -96,6 +96,8 @@ class TemporalSequenceAttention(nn.Module):
     
     Applies multi-head self-attention along the temporal dimension
     of the spectrogram to capture long-range temporal dependencies.
+    Chunked execution is supported to avoid excessive GPU memory usage
+    when the number of frequency bins is large.
     """
 
     def __init__(
@@ -103,8 +105,8 @@ class TemporalSequenceAttention(nn.Module):
         dim: int,
         num_heads: int = 8,
         dropout: float = 0.0,
-        mlp_ratio: float = 4.0,
-        attn_chunk_size: Optional[int] = 128,
+    mlp_ratio: float = 4.0,
+    attn_chunk_size: Optional[int] = 16,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -143,6 +145,7 @@ class TemporalSequenceAttention(nn.Module):
         # Self-attention with residual connection
         normed = self.norm1(x_reshaped)
         if self.attn_chunk_size is not None and normed.size(0) > self.attn_chunk_size:
+            # Chunk over frequency bins to keep per-step attention matrices small
             attn_out = torch.empty_like(normed)
             chunk = self.attn_chunk_size
             for start in range(0, normed.size(0), chunk):
@@ -167,6 +170,8 @@ class FrequencySequenceAttention(nn.Module):
     
     Applies multi-head self-attention along the frequency dimension
     of the spectrogram to capture frequency-domain relationships.
+    Chunked execution is supported to keep memory usage manageable
+    for long spectrogram sequences.
     """
 
     def __init__(
@@ -175,7 +180,7 @@ class FrequencySequenceAttention(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.0,
         mlp_ratio: float = 4.0,
-        attn_chunk_size: Optional[int] = 128,
+        attn_chunk_size: Optional[int] = 16,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -214,6 +219,7 @@ class FrequencySequenceAttention(nn.Module):
         # Self-attention with residual connection
         normed = self.norm1(x_reshaped)
         if self.attn_chunk_size is not None and normed.size(0) > self.attn_chunk_size:
+            # Chunk over time frames to reduce memory pressure of frequency attention
             attn_out = torch.empty_like(normed)
             chunk = self.attn_chunk_size
             for start in range(0, normed.size(0), chunk):
