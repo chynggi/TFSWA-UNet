@@ -119,42 +119,48 @@ class Trainer:
             mixtures = mixtures.to(self.device)  # (B, 2, samples)
             targets = {k: v.to(self.device) for k, v in targets.items()}
             
-            # Forward pass with mixed precision
-            with torch.amp.autocast(device_type="cuda", enabled=self.use_amp):
-                # Compute STFT
-                mixture_spec = self.stft_processor.stft(mixtures)  # (B, 2, F, T) complex
-                
-                target_specs = {}
-                for stem_name, stem_audio in targets.items():
-                    target_specs[stem_name] = self.stft_processor.stft(stem_audio)
-                
+            # Compute STFT (outside autocast to avoid ComplexHalf issues)
+            mixture_spec = self.stft_processor.stft(mixtures)  # (B, 2, F, T) complex64
+            
+            target_specs = {}
+            for stem_name, stem_audio in targets.items():
+                target_specs[stem_name] = self.stft_processor.stft(stem_audio)
+            
+            # Get mixture magnitude and phase (complex operations in float32)
+            mixture_spec_mono = mixture_spec.mean(dim=1)  # (B, F, T) complex
+            mixture_mag = torch.abs(mixture_spec_mono)  # (B, F, T) real
+            
+            # Get target magnitudes for loss
+            target_mags = {}
+            for k, v in target_specs.items():
+                target_mono = v.mean(dim=1)  # (B, F, T) complex
+                target_mags[k] = torch.abs(target_mono)  # (B, F, T) real
+            
+            # Forward pass with mixed precision (only for model inference)
+            with torch.amp.autocast(device_type="cuda", enabled=self.use_amp, dtype=torch.float16):
                 # Convert to model input (real, imag)
                 model_input = self.stft_processor.to_model_input(mixture_spec)  # (B, 4, F, T)
                 
                 # Model prediction
                 model_output = self.model(model_input)  # (B, n_stems*2, F, T)
                 
-                # Convert model output to spectrograms
-                n_stems = len(self.target_stems)
-                pred_specs = {}
-                
+                # Convert model output to magnitude masks
+                pred_mags = {}
                 for idx, stem_name in enumerate(self.target_stems):
                     # Extract mask for this stem
                     stem_mask = model_output[:, idx*2:(idx+1)*2, :, :]  # (B, 2, F, T)
                     
-                    # Convert back to complex (real, imag -> complex)
-                    real = stem_mask[:, 0:1, :, :]
-                    imag = stem_mask[:, 1:2, :, :]
-                    mask_complex = torch.complex(real, imag).squeeze(1)  # (B, F, T)
+                    # Compute mask magnitude and apply sigmoid
+                    mask_mag = torch.sqrt(stem_mask[:, 0, :, :]**2 + stem_mask[:, 1, :, :]**2 + 1e-8)  # (B, F, T)
+                    mask_mag = torch.sigmoid(mask_mag)  # Constrain to [0, 1]
                     
-                    # Apply mask to mixture (broadcast over channels)
-                    mixture_spec_mono = mixture_spec.mean(dim=1)  # (B, F, T)
-                    pred_specs[stem_name] = mixture_spec_mono * mask_complex
+                    # Apply mask to mixture magnitude (in-place to save memory)
+                    pred_mags[stem_name] = mixture_mag * mask_mag
                 
                 # Compute loss
                 loss_dict = self.loss_fn(
-                    pred_specs=pred_specs,
-                    target_specs={k: v.mean(dim=1) for k, v in target_specs.items()},
+                    pred_specs=pred_mags,
+                    target_specs=target_mags,
                 )
                 
                 loss = loss_dict['total_loss']
@@ -181,7 +187,12 @@ class Trainer:
             for key, value in loss_dict.items():
                 if key not in epoch_losses:
                     epoch_losses[key] = 0.0
-                epoch_losses[key] += value.item()
+                loss_val = value.item() if torch.is_tensor(value) else value
+                epoch_losses[key] += loss_val
+                
+                # Debug: print first batch losses
+                if batch_idx == 0 and self.current_epoch == 0:
+                    print(f"  Debug - {key}: {loss_val:.6f}")
             
             # Logging
             if self.global_step % self.log_every_n_steps == 0:
@@ -230,29 +241,39 @@ class Trainer:
             for stem_name, stem_audio in targets.items():
                 target_specs[stem_name] = self.stft_processor.stft(stem_audio)
             
+            # Get mixture magnitude
+            mixture_spec_mono = mixture_spec.mean(dim=1)  # (B, F, T) complex
+            mixture_mag = torch.abs(mixture_spec_mono)  # (B, F, T) real
+            
+            # Get target magnitudes for loss
+            target_mags = {}
+            for k, v in target_specs.items():
+                target_mono = v.mean(dim=1)  # (B, F, T) complex
+                target_mags[k] = torch.abs(target_mono)  # (B, F, T) real
+            
             # Convert to model input
             model_input = self.stft_processor.to_model_input(mixture_spec)
             
             # Model prediction
             model_output = self.model(model_input)
             
-            # Convert model output to spectrograms
-            n_stems = len(self.target_stems)
-            pred_specs = {}
-            
+            # Convert model output to magnitude predictions
+            pred_mags = {}
             for idx, stem_name in enumerate(self.target_stems):
-                stem_mask = model_output[:, idx*2:(idx+1)*2, :, :]
-                real = stem_mask[:, 0:1, :, :]
-                imag = stem_mask[:, 1:2, :, :]
-                mask_complex = torch.complex(real, imag).squeeze(1)
+                # Extract mask for this stem
+                stem_mask = model_output[:, idx*2:(idx+1)*2, :, :]  # (B, 2, F, T)
                 
-                mixture_spec_mono = mixture_spec.mean(dim=1)
-                pred_specs[stem_name] = mixture_spec_mono * mask_complex
+                # Compute mask magnitude and apply sigmoid
+                mask_mag = torch.sqrt(stem_mask[:, 0, :, :]**2 + stem_mask[:, 1, :, :]**2 + 1e-8)  # (B, F, T)
+                mask_mag = torch.sigmoid(mask_mag)  # Constrain to [0, 1]
+                
+                # Apply mask to mixture magnitude
+                pred_mags[stem_name] = mixture_mag * mask_mag
             
             # Compute loss
             loss_dict = self.loss_fn(
-                pred_specs=pred_specs,
-                target_specs={k: v.mean(dim=1) for k, v in target_specs.items()},
+                pred_specs=pred_mags,
+                target_specs=target_mags,
             )
             
             # Accumulate losses

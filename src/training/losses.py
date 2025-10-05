@@ -29,8 +29,8 @@ class L1SpectrogramLoss(nn.Module):
         Compute L1 loss.
         
         Args:
-            pred_spec: (B, C, F, T) predicted spectrogram
-            target_spec: (B, C, F, T) target spectrogram
+            pred_spec: (B, F, T) or (B, C, F, T) predicted spectrogram (can be complex)
+            target_spec: (B, F, T) or (B, C, F, T) target spectrogram (can be complex)
             
         Returns:
             loss: Scalar or (B,) tensor depending on reduction
@@ -40,6 +40,10 @@ class L1SpectrogramLoss(nn.Module):
             pred_spec = torch.abs(pred_spec)
         if torch.is_complex(target_spec):
             target_spec = torch.abs(target_spec)
+        
+        # Ensure tensors are float (not half during backprop)
+        pred_spec = pred_spec.float()
+        target_spec = target_spec.float()
         
         loss = F.l1_loss(pred_spec, target_spec, reduction=self.reduction)
         return loss
