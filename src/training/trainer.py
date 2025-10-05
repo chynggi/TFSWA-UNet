@@ -120,7 +120,7 @@ class Trainer:
             targets = {k: v.to(self.device) for k, v in targets.items()}
             
             # Forward pass with mixed precision
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
+            with torch.amp.autocast(device_type="cuda", enabled=self.use_amp):
                 # Compute STFT
                 mixture_spec = self.stft_processor.stft(mixtures)  # (B, 2, F, T) complex
                 

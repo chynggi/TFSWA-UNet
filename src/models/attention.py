@@ -51,15 +51,18 @@ class MultiHeadAttention(nn.Module):
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        *,
+        return_attn_weights: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
         """
         Args:
             x: Input tensor of shape (B, N, C) where N is sequence length
             mask: Optional attention mask
+            return_attn_weights: Whether to return attention weights alongside the output
             
         Returns:
             output: Attention output of shape (B, N, C)
-            weights: Attention weights of shape (B, num_heads, N, N)
+            weights: Attention weights of shape (B, num_heads, N, N) if requested
         """
         B, N, C = x.shape
         
@@ -82,7 +85,9 @@ class MultiHeadAttention(nn.Module):
         output = output.transpose(1, 2).reshape(B, N, C)
         output = self.proj(output)
         
-        return output, weights
+        if return_attn_weights:
+            return output, weights
+        return output
 
 
 class TemporalSequenceAttention(nn.Module):
@@ -99,10 +104,12 @@ class TemporalSequenceAttention(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.0,
         mlp_ratio: float = 4.0,
+        attn_chunk_size: Optional[int] = 128,
     ) -> None:
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
+        self.attn_chunk_size = attn_chunk_size
         
         self.norm1 = nn.LayerNorm(dim)
         self.attn = MultiHeadAttention(dim, num_heads, dropout)
@@ -135,7 +142,14 @@ class TemporalSequenceAttention(nn.Module):
         
         # Self-attention with residual connection
         normed = self.norm1(x_reshaped)
-        attn_out, _ = self.attn(normed)
+        if self.attn_chunk_size is not None and normed.size(0) > self.attn_chunk_size:
+            attn_out = torch.empty_like(normed)
+            chunk = self.attn_chunk_size
+            for start in range(0, normed.size(0), chunk):
+                end = min(start + chunk, normed.size(0))
+                attn_out[start:end] = self.attn(normed[start:end])
+        else:
+            attn_out = self.attn(normed)
         x_reshaped = x_reshaped + attn_out
         
         # MLP with residual connection
@@ -161,10 +175,12 @@ class FrequencySequenceAttention(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.0,
         mlp_ratio: float = 4.0,
+        attn_chunk_size: Optional[int] = 128,
     ) -> None:
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
+        self.attn_chunk_size = attn_chunk_size
         
         self.norm1 = nn.LayerNorm(dim)
         self.attn = MultiHeadAttention(dim, num_heads, dropout)
@@ -197,7 +213,14 @@ class FrequencySequenceAttention(nn.Module):
         
         # Self-attention with residual connection
         normed = self.norm1(x_reshaped)
-        attn_out, _ = self.attn(normed)
+        if self.attn_chunk_size is not None and normed.size(0) > self.attn_chunk_size:
+            attn_out = torch.empty_like(normed)
+            chunk = self.attn_chunk_size
+            for start in range(0, normed.size(0), chunk):
+                end = min(start + chunk, normed.size(0))
+                attn_out[start:end] = self.attn(normed[start:end])
+        else:
+            attn_out = self.attn(normed)
         x_reshaped = x_reshaped + attn_out
         
         # MLP with residual connection
@@ -350,7 +373,7 @@ class ShiftedWindowAttention(nn.Module):
         
         # Apply attention without mask (simplified for now)
         # TODO: Properly implement attention mask for shifted windows
-        attn_out, _ = self.attn(normed)
+        attn_out = self.attn(normed)
             
         x_windows = x_windows + attn_out
         
