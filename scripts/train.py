@@ -98,6 +98,14 @@ def parse_args():
     parser.add_argument('--save_every_n_epochs', type=int, default=10,
                         help='Checkpoint saving frequency')
     
+    # Evaluation arguments
+    parser.add_argument('--eval_sdr', action='store_true', default=True,
+                        help='Evaluate with real source separation and SDR metrics')
+    parser.add_argument('--eval_num_tracks', type=int, default=5,
+                        help='Number of validation tracks to evaluate SDR on (5 recommended)')
+    parser.add_argument('--no_eval_sdr', dest='eval_sdr', action='store_false',
+                        help='Disable SDR evaluation (faster but less informative)')
+    
     # Other arguments
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Device to use')
@@ -267,6 +275,8 @@ def main():
         save_every_n_epochs=args.save_every_n_epochs,
         use_amp=args.use_amp,
         target_stems=args.target_stems,
+        eval_sdr=args.eval_sdr,
+        eval_num_tracks=args.eval_num_tracks,
     )
     
     # Resume from checkpoint if specified
