@@ -45,7 +45,22 @@ class L1SpectrogramLoss(nn.Module):
         pred_spec = pred_spec.float()
         target_spec = target_spec.float()
         
+        # Check for NaN or invalid values
+        if torch.isnan(pred_spec).any() or torch.isnan(target_spec).any():
+            print(f"WARNING: NaN detected in L1 loss inputs!")
+            return torch.tensor(0.0, device=pred_spec.device, requires_grad=True)
+        
+        if torch.isinf(pred_spec).any() or torch.isinf(target_spec).any():
+            print(f"WARNING: Inf detected in L1 loss inputs!")
+            return torch.tensor(0.0, device=pred_spec.device, requires_grad=True)
+        
         loss = F.l1_loss(pred_spec, target_spec, reduction=self.reduction)
+        
+        # Verify loss is valid
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"WARNING: Invalid loss computed: {loss}")
+            return torch.tensor(0.0, device=pred_spec.device, requires_grad=True)
+        
         return loss
 
 

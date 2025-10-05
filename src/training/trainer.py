@@ -136,6 +136,16 @@ class Trainer:
                 target_mono = v.mean(dim=1)  # (B, F, T) complex
                 target_mags[k] = torch.abs(target_mono)  # (B, F, T) real
             
+            # Debug: Check data statistics on first batch
+            if batch_idx == 0 and self.current_epoch == 0:
+                print(f"\n=== Data Statistics ===")
+                print(f"Mixture audio - shape: {mixtures.shape}, range: [{mixtures.min():.4f}, {mixtures.max():.4f}], mean: {mixtures.mean():.4f}")
+                print(f"Mixture magnitude - shape: {mixture_mag.shape}, range: [{mixture_mag.min():.4f}, {mixture_mag.max():.4f}], mean: {mixture_mag.mean():.4f}")
+                for k, v in targets.items():
+                    print(f"Target {k} audio - shape: {v.shape}, range: [{v.min():.4f}, {v.max():.4f}], mean: {v.mean():.4f}")
+                for k, v in target_mags.items():
+                    print(f"Target {k} magnitude - shape: {v.shape}, range: [{v.min():.4f}, {v.max():.4f}], mean: {v.mean():.4f}")
+            
             # Forward pass with mixed precision (only for model inference)
             with torch.amp.autocast(device_type="cuda", enabled=self.use_amp, dtype=torch.float16):
                 # Convert to model input (real, imag)
@@ -143,6 +153,12 @@ class Trainer:
                 
                 # Model prediction
                 model_output = self.model(model_input)  # (B, n_stems*2, F, T)
+                
+                # Debug: Check model output on first batch
+                if batch_idx == 0 and self.current_epoch == 0:
+                    print(f"\n=== Model Output Statistics ===")
+                    print(f"Model input - shape: {model_input.shape}, range: [{model_input.min():.4f}, {model_input.max():.4f}], mean: {model_input.mean():.4f}")
+                    print(f"Model output - shape: {model_output.shape}, range: [{model_output.min():.4f}, {model_output.max():.4f}], mean: {model_output.mean():.4f}")
                 
                 # Convert model output to magnitude masks
                 pred_mags = {}
@@ -156,6 +172,11 @@ class Trainer:
                     
                     # Apply mask to mixture magnitude (in-place to save memory)
                     pred_mags[stem_name] = mixture_mag * mask_mag
+                    
+                    # Debug: Check predictions on first batch
+                    if batch_idx == 0 and self.current_epoch == 0:
+                        print(f"\n{stem_name} mask - range: [{mask_mag.min():.4f}, {mask_mag.max():.4f}], mean: {mask_mag.mean():.4f}")
+                        print(f"{stem_name} pred_mag - range: [{pred_mags[stem_name].min():.4f}, {pred_mags[stem_name].max():.4f}], mean: {pred_mags[stem_name].mean():.4f}")
                 
                 # Compute loss
                 loss_dict = self.loss_fn(
@@ -164,6 +185,13 @@ class Trainer:
                 )
                 
                 loss = loss_dict['total_loss']
+                
+                # Debug: Check if loss computation is working
+                if batch_idx == 0 and self.current_epoch == 0:
+                    print(f"\n=== Loss Computation ===")
+                    for k in pred_mags.keys():
+                        diff = torch.abs(pred_mags[k] - target_mags[k])
+                        print(f"{k} L1 diff - range: [{diff.min():.6f}, {diff.max():.6f}], mean: {diff.mean():.6f}")
             
             # Backward pass
             self.optimizer.zero_grad()
