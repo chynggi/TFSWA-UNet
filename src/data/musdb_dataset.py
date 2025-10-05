@@ -142,16 +142,33 @@ class MUSDB18Dataset(Dataset):
         If stem_name is 'other' and not in target_stems as individual,
         combine all non-target stems.
         """
-        # If requesting 'other' in binary mode (vocals vs rest)
+        available_sources = track.targets.keys()
+
+        # Direct match first
+        if stem_name in available_sources:
+            return track.targets[stem_name].audio
+
+        # Handle binary separation when dataset only provides accompaniment stem
         if stem_name == 'other' and len(self.target_stems) == 2 and 'vocals' in self.target_stems:
-            # Combine drums + bass + other
+            # MUSDB18-HQ exposes "accompaniment" instead of individual drums/bass/other
+            if 'accompaniment' in available_sources:
+                return track.targets['accompaniment'].audio
+
+            # Fall back to summing every non-vocal source that exists
             audio = np.zeros_like(track.audio)
-            for source in ['drums', 'bass', 'other']:
+            combined_sources = [name for name in available_sources if name != 'vocals']
+            if not combined_sources:
+                raise KeyError(
+                    "No accompaniment sources found to construct 'other'. Available sources: "
+                    f"{sorted(available_sources)}"
+                )
+            for source in combined_sources:
                 audio += track.targets[source].audio
             return audio
-        
-        # Otherwise return individual stem
-        return track.targets[stem_name].audio
+
+        raise KeyError(
+            f"Stem '{stem_name}' not available in track '{track.name}'. Available sources: {sorted(available_sources)}"
+        )
     
     def _load_audio_segment(
         self,
