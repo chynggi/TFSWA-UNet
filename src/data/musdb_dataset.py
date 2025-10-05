@@ -234,9 +234,20 @@ class MUSDB18Dataset(Dataset):
             mixture: (2, samples) stereo mixture
             targets: Dict of stem_name -> (2, samples) stereo audio
         """
-        # Get track information
+        # MUSDB18-HQ structure: root/train|test/track_name/stem.wav
+        # track.path points to the track directory
         track_path = Path(track.path)
         track_length = track.samples
+        
+        # Debug: Print track path for first load
+        if not hasattr(self, '_debug_printed'):
+            print(f"\nDEBUG: Track path structure:")
+            print(f"  track.path: {track.path}")
+            print(f"  track.name: {track.name}")
+            print(f"  track_path exists: {track_path.exists()}")
+            if track_path.exists():
+                print(f"  Contents: {list(track_path.iterdir())[:5]}")
+            self._debug_printed = True
         
         # Determine segment start
         if start_sample is None:
@@ -251,41 +262,63 @@ class MUSDB18Dataset(Dataset):
         stem_audios = []
         
         for stem_name in self.target_stems:
-            # Find the stem file path
+            # Find the stem file path - MUSDB18-HQ stores as: track_path/stem.wav
             if stem_name == 'other' and len(self.target_stems) == 2 and 'vocals' in self.target_stems:
                 # For binary separation, combine non-vocal stems
                 other_audio = None
                 for other_stem in ['drums', 'bass', 'other']:
                     stem_path = track_path / f"{other_stem}.wav"
+                    if not stem_path.exists():
+                        # Try without track subfolder (some formats store differently)
+                        stem_path = Path(track.path).parent / f"{track.name}_{other_stem}.wav"
+                    
                     if stem_path.exists():
-                        chunk = load_chunk(str(stem_path), track_length, 
-                                         self.segment_samples, start_sample)
-                        if other_audio is None:
-                            other_audio = chunk
-                        else:
-                            other_audio = other_audio + chunk
+                        try:
+                            chunk = load_chunk(str(stem_path), track_length, 
+                                             self.segment_samples, start_sample)
+                            if other_audio is None:
+                                other_audio = chunk
+                            else:
+                                other_audio = other_audio + chunk
+                        except Exception as e:
+                            print(f"Warning: Failed to load {stem_path}: {e}")
+                            continue
                 
                 if other_audio is None:
-                    other_audio = np.zeros((2, self.segment_samples), dtype=np.float32)
+                    # Fallback: load from musdb if file loading fails
+                    print(f"Warning: Could not load 'other' stem files, using fallback method")
+                    return self._load_audio_segment(track, start_sample)
+                    
                 targets[stem_name] = torch.from_numpy(other_audio).float()
                 stem_audios.append(other_audio)
             else:
                 stem_path = track_path / f"{stem_name}.wav"
+                if not stem_path.exists():
+                    # Try alternative path format
+                    stem_path = Path(track.path).parent / f"{track.name}_{stem_name}.wav"
+                
                 if stem_path.exists():
-                    chunk = load_chunk(str(stem_path), track_length, 
-                                     self.segment_samples, start_sample)
+                    try:
+                        chunk = load_chunk(str(stem_path), track_length, 
+                                         self.segment_samples, start_sample)
+                    except Exception as e:
+                        print(f"Warning: Failed to load {stem_path}: {e}")
+                        chunk = np.zeros((2, self.segment_samples), dtype=np.float32)
                 else:
-                    chunk = np.zeros((2, self.segment_samples), dtype=np.float32)
+                    # Fallback to loading full track
+                    print(f"Warning: Stem file not found: {stem_path}, using fallback")
+                    return self._load_audio_segment(track, start_sample)
+                    
                 targets[stem_name] = torch.from_numpy(chunk).float()
                 stem_audios.append(chunk)
         
         # Create mixture by summing all stems
-        mixture = np.sum(stem_audios, axis=0)
-        mixture = torch.from_numpy(mixture).float()
-        
-        # Check if chunk is loud enough (filter silent chunks)
-        # Note: We don't retry here to avoid recursion issues
-        # Silent filtering should be done at dataset level if needed
+        if len(stem_audios) > 0:
+            mixture = np.sum(stem_audios, axis=0)
+            mixture = torch.from_numpy(mixture).float()
+        else:
+            # If no stems loaded, use fallback
+            return self._load_audio_segment(track, start_sample)
         
         return mixture, targets
     
@@ -304,12 +337,31 @@ class MUSDB18Dataset(Dataset):
         # Use efficient loading if enabled
         if self.use_efficient_loading and self.is_wav:
             try:
-                return self._load_audio_segment_efficient(track, start_sample)
+                result = self._load_audio_segment_efficient(track, start_sample)
+                # Verify data is not all zeros
+                mixture, targets = result
+                if mixture.abs().sum() > 0:
+                    return result
+                else:
+                    if not hasattr(self, '_warned_zero_data'):
+                        print(f"Warning: Efficient loading returned zero data, using fallback method")
+                        self._warned_zero_data = True
             except Exception as e:
                 # Fallback to original method if efficient loading fails
-                print(f"Efficient loading failed, using fallback: {e}")
+                if not hasattr(self, '_warned_efficient_fail'):
+                    print(f"Warning: Efficient loading failed ({e}), using fallback method")
+                    self._warned_efficient_fail = True
         
         # Original loading method (loads entire track into memory)
+        # Debug: Print track info on first call
+        if not hasattr(self, '_debug_fallback_printed'):
+            print(f"\nDEBUG: Using fallback loading method")
+            print(f"  Track name: {track.name}")
+            print(f"  Track audio shape: {track.audio.shape}")
+            print(f"  Track audio range: [{track.audio.min():.4f}, {track.audio.max():.4f}]")
+            print(f"  Available targets: {list(track.targets.keys())}")
+            self._debug_fallback_printed = True
+        
         # Get track length
         track_length = track.audio.shape[0]
         
@@ -336,6 +388,14 @@ class MUSDB18Dataset(Dataset):
             targets[stem_name] = torch.from_numpy(stem_audio).float()
         
         mixture = torch.from_numpy(mixture).float()
+        
+        # Debug: Verify data is not zero
+        if not hasattr(self, '_debug_data_verified'):
+            print(f"\nDEBUG: Verifying loaded data")
+            print(f"  Mixture range: [{mixture.min():.4f}, {mixture.max():.4f}], mean: {mixture.mean():.4f}")
+            for k, v in targets.items():
+                print(f"  {k} range: [{v.min():.4f}, {v.max():.4f}], mean: {v.mean():.4f}")
+            self._debug_data_verified = True
         
         # Pad if necessary (for last segment)
         if actual_samples < self.segment_samples:
