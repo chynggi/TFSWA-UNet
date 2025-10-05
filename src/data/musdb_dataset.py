@@ -53,6 +53,10 @@ class MUSDB18Dataset(Dataset):
             )
         
         self.root = Path(root)
+        if not self.root.exists():
+            raise FileNotFoundError(
+                f"MUSDB18 root '{self.root}' does not exist. Set --data_root to the dataset directory."
+            )
         self.split = split
         self.sample_rate = sample_rate
         self.segment_samples = int(segment_seconds * sample_rate)
@@ -82,6 +86,12 @@ class MUSDB18Dataset(Dataset):
 
         self.mus = musdb.DB(root=str(self.root), subsets=subsets, split=split_arg)
         self.tracks = self.mus.tracks
+
+        if len(self.tracks) == 0:
+            raise RuntimeError(
+                "No MUSDB18 tracks found. Ensure the dataset is downloaded and located under "
+                f"'{self.root}'. Refer to https://sigsep.github.io/datasets/musdb.html for download instructions."
+            )
         
         print(f"Loaded {len(self.tracks)} tracks from MUSDB18 {split} split")
         print(f"Target stems: {self.target_stems}")
