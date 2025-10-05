@@ -31,6 +31,7 @@ class MUSDB18Dataset(Dataset):
         segment_seconds: Length of audio segments in seconds (default: 10)
         random_segments: Whether to randomly sample segments (train) or sequential (test)
         overlap: Overlap ratio for sequential segments (default: 0.25)
+        is_wav: Force dataset format (True for MUSDB18-HQ wav files). If None, attempt auto-detection.
     """
     
     AVAILABLE_STEMS = ['vocals', 'drums', 'bass', 'other']
@@ -44,6 +45,7 @@ class MUSDB18Dataset(Dataset):
         segment_seconds: float = 10.0,
         random_segments: bool = True,
         overlap: float = 0.25,
+        is_wav: Optional[bool] = None,
     ) -> None:
         super().__init__()
         
@@ -69,6 +71,9 @@ class MUSDB18Dataset(Dataset):
         
         self.target_stems = target_stems
         self._validate_stems()
+
+        # Determine file format for MUSDB18 (HQ uses wav files)
+        self.is_wav = is_wav if is_wav is not None else self._infer_is_wav()
         
         # Load MUSDB18 tracks (musdb expects validation split with subsets=['train'])
         if split not in {'train', 'valid', 'test'}:
@@ -84,7 +89,12 @@ class MUSDB18Dataset(Dataset):
             subsets = ['test']
             split_arg = None
 
-        self.mus = musdb.DB(root=str(self.root), subsets=subsets, split=split_arg)
+        self.mus = musdb.DB(
+            root=str(self.root),
+            subsets=subsets,
+            split=split_arg,
+            is_wav=self.is_wav,
+        )
         self.tracks = self.mus.tracks
 
         if len(self.tracks) == 0:
@@ -103,6 +113,27 @@ class MUSDB18Dataset(Dataset):
                 raise ValueError(
                     f"Invalid stem '{stem}'. Available stems: {self.AVAILABLE_STEMS}"
                 )
+
+    def _infer_is_wav(self) -> bool:
+        """Infer whether the dataset uses wav (MUSDB18-HQ) or stem files."""
+        # Prefer stem files if they exist; otherwise fall back to wav tracks.
+        for subset in ('train', 'test', 'valid'):
+            subset_dir = self.root / subset
+            if not subset_dir.exists():
+                continue
+
+            stem_sample = next(subset_dir.rglob('*.stem.mp4'), None)
+            if stem_sample is not None:
+                return False
+
+            wav_sample = next(subset_dir.rglob('*.wav'), None)
+            if wav_sample is not None:
+                return True
+
+        raise RuntimeError(
+            "Could not determine MUSDB18 file format. Ensure the dataset contains either "
+            "'.stem.mp4' (original) or '.wav' (MUSDB18-HQ) files."
+        )
     
     def _get_combined_stem(self, track: musdb.MultiTrack, stem_name: str) -> np.ndarray:
         """
