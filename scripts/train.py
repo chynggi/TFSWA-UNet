@@ -56,11 +56,11 @@ def parse_args():
                         help='Hop length')
     
     # Training arguments
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size')
     parser.add_argument('--max_epochs', type=int, default=300,
                         help='Maximum number of epochs')
-    parser.add_argument('--learning_rate', type=float, default=1e-3,
+    parser.add_argument('--learning_rate', type=float, default=1e-5,
                         help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='Weight decay')
