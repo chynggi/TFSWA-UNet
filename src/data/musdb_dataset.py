@@ -32,6 +32,7 @@ class MUSDB18Dataset(Dataset):
         random_segments: Whether to randomly sample segments (train) or sequential (test)
         overlap: Overlap ratio for sequential segments (default: 0.25)
         is_wav: Force dataset format (True for MUSDB18-HQ wav files). If None, attempt auto-detection.
+        max_segments_per_track: Limit on sequential segments per track (validation). None uses full coverage.
     """
     
     AVAILABLE_STEMS = ['vocals', 'drums', 'bass', 'other']
@@ -45,7 +46,8 @@ class MUSDB18Dataset(Dataset):
         segment_seconds: float = 10.0,
         random_segments: bool = True,
         overlap: float = 0.25,
-        is_wav: Optional[bool] = None,
+    is_wav: Optional[bool] = None,
+    max_segments_per_track: Optional[int] = None,
     ) -> None:
         super().__init__()
         
@@ -64,6 +66,9 @@ class MUSDB18Dataset(Dataset):
         self.segment_samples = int(segment_seconds * sample_rate)
         self.random_segments = random_segments
         self.overlap = overlap
+        self.max_segments_per_track = max_segments_per_track
+        if self.max_segments_per_track is not None and self.max_segments_per_track <= 0:
+            raise ValueError("max_segments_per_track must be positive when provided")
         
         # Target stems configuration
         if target_stems is None:
@@ -96,6 +101,10 @@ class MUSDB18Dataset(Dataset):
             is_wav=self.is_wav,
         )
         self.tracks = self.mus.tracks
+        self._segment_index: Optional[List[Tuple[int, int]]] = None
+
+        if not self.random_segments:
+            self._build_sequential_index()
 
         if len(self.tracks) == 0:
             raise RuntimeError(
@@ -220,24 +229,35 @@ class MUSDB18Dataset(Dataset):
         
         return mixture, targets
     
+    def _build_sequential_index(self) -> None:
+        """Precompute segment start positions for sequential sampling."""
+        self._segment_index = []
+
+        for track_idx, track in enumerate(self.tracks):
+            track_length = track.audio.shape[0]
+
+            if track_length <= self.segment_samples:
+                starts = [0]
+            else:
+                hop = max(1, int(self.segment_samples * (1 - self.overlap)))
+                n_segments = max(1, (track_length - self.segment_samples) // hop + 1)
+
+                if self.max_segments_per_track is not None and n_segments > self.max_segments_per_track:
+                    max_start = track_length - self.segment_samples
+                    # Evenly spaced segment starting points across track
+                    starts = [int(round(x)) for x in np.linspace(0, max_start, self.max_segments_per_track)]
+                else:
+                    starts = [min(track_length - self.segment_samples, i * hop) for i in range(n_segments)]
+
+            for start in starts:
+                self._segment_index.append((track_idx, start))
+
     def __len__(self) -> int:
-        """
-        Return number of segments.
-        
-        For random sampling: use number of tracks (each epoch samples differently)
-        For sequential: calculate total number of segments across all tracks
-        """
+        """Return dataset length."""
         if self.random_segments:
             return len(self.tracks)
-        else:
-            # Calculate total segments with overlap
-            total_segments = 0
-            for track in self.tracks:
-                track_length = track.audio.shape[0]
-                hop = int(self.segment_samples * (1 - self.overlap))
-                n_segments = max(1, (track_length - self.segment_samples) // hop + 1)
-                total_segments += n_segments
-            return total_segments
+        assert self._segment_index is not None
+        return len(self._segment_index)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -252,23 +272,11 @@ class MUSDB18Dataset(Dataset):
             track = self.tracks[idx]
             mixture, targets = self._load_audio_segment(track)
         else:
-            # Sequential sampling: find track and segment
-            track_idx = 0
-            segment_idx = idx
-            hop = int(self.segment_samples * (1 - self.overlap))
-            
-            for track in self.tracks:
-                track_length = track.audio.shape[0]
-                n_segments = max(1, (track_length - self.segment_samples) // hop + 1)
-                
-                if segment_idx < n_segments:
-                    start_sample = segment_idx * hop
-                    mixture, targets = self._load_audio_segment(track, start_sample)
-                    break
-                
-                segment_idx -= n_segments
-                track_idx += 1
-        
+            assert self._segment_index is not None
+            track_idx, start_sample = self._segment_index[idx]
+            track = self.tracks[track_idx]
+            mixture, targets = self._load_audio_segment(track, start_sample)
+
         return mixture, targets
     
     def get_full_track(

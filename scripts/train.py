@@ -68,6 +68,8 @@ def parse_args():
                         help='Gradient clipping value')
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers')
+    parser.add_argument('--val_segments_per_track', type=int, default=1,
+                        help='Number of sequential validation segments per track (None for all)')
     
     # Loss arguments
     parser.add_argument('--l1_weight', type=float, default=1.0,
@@ -138,6 +140,10 @@ def main():
         sample_rate=args.sample_rate,
         segment_seconds=args.segment_seconds,
         random_segments=False,
+        max_segments_per_track=(
+            None if args.val_segments_per_track is None or args.val_segments_per_track <= 0
+            else args.val_segments_per_track
+        ),
     )
     
     # Create data loaders
