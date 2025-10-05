@@ -1,9 +1,9 @@
 root: data/musdb18
 sample_rate: 44100
-segment_seconds: 6.0  # Reduced from 10 to save VRAM
+segment_seconds: 3.0  # Reduced to 3s for extreme VRAM saving
 stft:
-  window_size: 2048  # Reduced from 4096 to save VRAM
-  hop_length: 512     # Reduced from 1024 accordingly
+  window_size: 1024  # Reduced to 1024 for extreme VRAM saving
+  hop_length: 256     # Reduced accordingly
   window: hann
 
 # Memory optimization settings

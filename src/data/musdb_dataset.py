@@ -284,10 +284,8 @@ class MUSDB18Dataset(Dataset):
         mixture = torch.from_numpy(mixture).float()
         
         # Check if chunk is loud enough (filter silent chunks)
-        if self.min_mean_abs > 0:
-            if np.abs(mixture.numpy()).mean() < self.min_mean_abs:
-                # Recursively try another chunk
-                return self._load_audio_segment_efficient(track, start_sample=None)
+        # Note: We don't retry here to avoid recursion issues
+        # Silent filtering should be done at dataset level if needed
         
         return mixture, targets
     

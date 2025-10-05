@@ -130,6 +130,35 @@ pip install -e .
 pip install -e ".[train]"  # For training dependencies
 ```
 
+### Training with Memory Optimization
+
+```bash
+# Optimized for low VRAM (4-6 GB)
+python scripts/train.py \
+    --data_root data/musdb18 \
+    --batch_size 2 \
+    --segment_seconds 6.0 \
+    --n_fft 2048 \
+    --hop_length 512 \
+    --use_efficient_loading \
+    --persistent_workers \
+    --use_amp \
+    --use_checkpointing
+
+# For more VRAM (12+ GB)
+python scripts/train.py \
+    --data_root data/musdb18 \
+    --batch_size 8 \
+    --segment_seconds 6.0 \
+    --n_fft 2048 \
+    --hop_length 512 \
+    --use_efficient_loading \
+    --persistent_workers \
+    --use_amp
+```
+
+See **[docs/MEMORY_OPTIMIZATION.md](docs/MEMORY_OPTIMIZATION.md)** for detailed memory optimization guide.
+
 ### Test the Model
 
 ```bash
@@ -175,6 +204,7 @@ All core components have been validated:
 
 ## 📖 Documentation
 
+- **[docs/MEMORY_OPTIMIZATION.md](docs/MEMORY_OPTIMIZATION.md)** - Memory optimization and VRAM reduction guide
 - **[PHASE1_SUMMARY.md](PHASE1_SUMMARY.md)** - Quick overview of Phase 1
 - **[PHASE1_IMPLEMENTATION_REPORT.md](PHASE1_IMPLEMENTATION_REPORT.md)** - Detailed technical documentation
 - **[.github/copilot-instructions.md](.github/copilot-instructions.md)** - Project guidelines and conventions

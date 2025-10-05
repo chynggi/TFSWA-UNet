@@ -31,8 +31,8 @@ def parse_args():
                         help='Target stems to separate')
     parser.add_argument('--sample_rate', type=int, default=44100,
                         help='Audio sample rate')
-    parser.add_argument('--segment_seconds', type=float, default=6.0,
-                        help='Segment length in seconds')
+    parser.add_argument('--segment_seconds', type=float, default=3.0,
+                        help='Segment length in seconds (3.0 for low VRAM, 6.0+ for better quality)')
     
     # Model arguments
     parser.add_argument('--in_channels', type=int, default=2,
@@ -51,14 +51,14 @@ def parse_args():
                         help='Number of attention heads')
     
     # STFT arguments
-    parser.add_argument('--n_fft', type=int, default=2048,
-                        help='FFT size')
-    parser.add_argument('--hop_length', type=int, default=512,
-                        help='Hop length')
+    parser.add_argument('--n_fft', type=int, default=1024,
+                        help='FFT size (1024 for low VRAM, 2048 for better quality)')
+    parser.add_argument('--hop_length', type=int, default=256,
+                        help='Hop length (n_fft // 4)')
     
     # Training arguments
     parser.add_argument('--batch_size', type=int, default=1,
-                        help='Batch size')
+                        help='Batch size (use 1 for low VRAM)')
     parser.add_argument('--max_epochs', type=int, default=300,
                         help='Maximum number of epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-5,
